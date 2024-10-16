@@ -18,5 +18,7 @@ WORKDIR /root/
 COPY --from=builder /app/main .
 COPY index.html .
 
+ENV DOTNET_CLI_USE_MSBUILD_SERVER=1
+
 # Command to run the executable
 CMD ["./main"]
