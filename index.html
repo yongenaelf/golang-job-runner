@@ -12,7 +12,12 @@
       enctype="multipart/form-data"
     >
       <input type="file" name="file" />
-      <input type="submit" value="Upload" />
+      <input type="submit" value="Build" />
+      <input
+        type="submit"
+        value="Test"
+        formaction="http://localhost:8080/upload?command=test"
+      />
     </form>
   </body>
 </html>

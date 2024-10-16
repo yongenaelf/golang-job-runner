@@ -58,13 +58,20 @@ func extractZip(zipFile, dest string) error {
 	return nil
 }
 
-func findCsprojFile(root string) (string, error) {
+func findCsprojFile(root string, isTest bool) (string, error) {
 	var csprojPath string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if strings.HasSuffix(info.Name(), ".csproj") {
+		var suffix string
+		if isTest {
+			suffix = ".Tests.csproj"
+		} else {
+			suffix = ".csproj"
+		}
+
+		if strings.HasSuffix(info.Name(), suffix) {
 			csprojPath = path
 			return filepath.SkipDir // Stop walking once we found a .csproj
 		}
@@ -84,16 +91,29 @@ func runDotNetBuild(csprojPath string) (string, string, error) {
 	cmd := exec.Command("dotnet", "build")
 	cmd.Dir = projectDir
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 
 	if err := cmd.Run(); err != nil {
-		return "", stderr.String(), err
+		return "", stdout.String(), err
 	}
 
 	// Locate the build output directory
 	outputDir := filepath.Join(projectDir, "bin", "Debug")
-	return outputDir, "", nil
+	return outputDir, stdout.String(), nil
+}
+
+func runDotNetTest(csprojPath string) (string, error) {
+	projectDir := filepath.Dir(csprojPath)
+	cmd := exec.Command("dotnet", "test")
+	cmd.Dir = projectDir
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	var err = cmd.Run()
+
+	return stdout.String(), err
 }
 
 func encodeDllToBase64(outputDir string) (string, error) {
@@ -137,6 +157,8 @@ func deleteFile(path string) {
 func handleUpload(w http.ResponseWriter, r *http.Request) {
 	const maxUploadSize = 10 << 20 // 10 MB
 	r.ParseMultipartForm(maxUploadSize)
+	params := r.URL.Query()
+	command := params.Get("command")
 
 	file, _, err := r.FormFile("file")
 	if err != nil {
@@ -169,42 +191,44 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defer func() {
+		// Ensure cleanup happens regardless of success or failure
+		deleteFile(filePath)
+		deleteFile(extractDir)
+	}()
+
 	if err := extractZip(filePath, extractDir); err != nil {
 		http.Error(w, "Failed to extract zip file", http.StatusInternalServerError)
-		deleteFile(filePath)
-		deleteFile(extractDir)
 		return
 	}
 
-	csprojPath, err := findCsprojFile(extractDir)
+	csprojPath, err := findCsprojFile(extractDir, command == "test")
 	if err != nil {
 		http.Error(w, "Failed to find .csproj file", http.StatusInternalServerError)
-		deleteFile(filePath)
-		deleteFile(extractDir)
 		return
 	}
 
-	outputDir, stderr, err := runDotNetBuild(csprojPath)
+	if command == "test" {
+		stdout, err := runDotNetTest(csprojPath)
+		if err != nil {
+			http.Error(w, "Test failed: "+stdout, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	outputDir, stdout, err := runDotNetBuild(csprojPath)
 	if err != nil {
-		http.Error(w, "Build failed: "+stderr, http.StatusInternalServerError)
-		deleteFile(filePath)
-		deleteFile(extractDir)
+		http.Error(w, "Build failed: "+stdout, http.StatusInternalServerError)
 		return
 	}
 
 	dllBase64, err := encodeDllToBase64(outputDir)
 	if err != nil {
 		http.Error(w, "Failed to encode .dll file: "+err.Error(), http.StatusInternalServerError)
-		deleteFile(filePath)
-		deleteFile(extractDir)
 		return
 	}
 
-	// Clean up the file and extraction directory after a successful build
-	deleteFile(filePath)
-	deleteFile(extractDir)
-
-	w.Write([]byte(dllBase64))
+	w.Write([]byte("Build output:\n" + stdout + "\n\nEncoded DLL:\n" + dllBase64))
 }
 
 func main() {
@@ -215,7 +239,9 @@ func main() {
 	}
 
 	http.HandleFunc("/upload", handleUpload)
+	http.Handle("/", http.FileServer(http.Dir("./")))
 
+	fmt.Println("Server listening on port 8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		fmt.Println("Failed to start server:", err)
 	}
