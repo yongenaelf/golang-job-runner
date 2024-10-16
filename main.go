@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -170,6 +172,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	guid := uuid.New()
 	fileName := guid.String() + ".zip"
 
+	log.Printf("Request time: %v\n", time.Now())
+	log.Printf("Starting job for: %s\n", fileName)
+	measureStart := time.Now()
+
 	uploadPath := "./uploads/"
 	filePath := uploadPath + fileName
 
@@ -192,6 +198,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer func() {
+		log.Printf("Job for %s took %v\n", fileName, time.Since(measureStart))
 		// Ensure cleanup happens regardless of success or failure
 		deleteFile(filePath)
 		deleteFile(extractDir)
